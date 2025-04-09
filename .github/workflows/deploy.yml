@@ -1,0 +1,74 @@
+name: 스마트 디자인 허브 배포
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: '배포 환경 선택'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      skin:
+        description: '스킨 이름 선택'
+        required: true
+        default: 'base'
+        type: choice
+        options:
+          - base
+          - mobile
+          - responsive
+
+jobs:
+  deploy:
+    name: Cafe24 SFTP 배포
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v3
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: 종속성 설치
+        run: npm ci
+
+      - name: LFTP 설치
+        run: sudo apt-get update && sudo apt-get install -y lftp
+
+      - name: 환경 변수 파일 생성
+        run: |
+          echo "FTP_HOST=${{ secrets.FTP_HOST }}" >> .env
+          echo "FTP_PORT=${{ secrets.FTP_PORT }}" >> .env
+          echo "FTP_USERNAME=${{ secrets.FTP_USERNAME }}" >> .env
+          echo "FTP_PASSWORD=${{ secrets.FTP_PASSWORD }}" >> .env
+          echo "FTP_BASE_DIR=${{ secrets.FTP_BASE_DIR }}" >> .env
+          echo "SKIN_DIR=${{ github.event.inputs.skin || 'base' }}" >> .env
+
+      - name: 배포 실행
+        run: npm run deploy
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_PORT: ${{ secrets.FTP_PORT }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_BASE_DIR: ${{ secrets.FTP_BASE_DIR }}
+          SKIN_DIR: ${{ github.event.inputs.skin || 'base' }}
+
+      - name: 배포 결과 확인
+        if: always()
+        run: |
+          if [ ${{ job.status }} == 'success' ]; then
+            echo "✅ 배포가 성공적으로 완료되었습니다."
+          else
+            echo "❌ 배포 중 오류가 발생했습니다. 로그를 확인해주세요."
+            exit 1
+          fi
