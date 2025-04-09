@@ -3,6 +3,8 @@ name: 스마트 디자인 허브 배포
 on:
   push:
     branches: [ main, master ]
+    paths: # public 디렉토리 하위 파일 변경 시에만 실행 (선택 사항)
+      - 'public/**'
   workflow_dispatch:
     inputs:
       environment:
@@ -20,18 +22,23 @@ on:
         type: choice
         options:
           - base
-          - mobile
-          - responsive
+          # - mobile # mobile 스킨이 있다면 주석 해제
+          - skin1
 
 jobs:
   deploy:
     name: Cafe24 SFTP 배포
     runs-on: ubuntu-latest
-    environment: production  # ← 이 부분 추가 (중요!)
+    environment: production
+
+    outputs:
+      deployed_skins: ${{ steps.set-deployed-skins.outputs.skins }}
 
     steps:
       - name: 코드 체크아웃
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # changed-files 액션에 필요
 
       - name: Node.js 설정
         uses: actions/setup-node@v3
@@ -45,16 +52,92 @@ jobs:
       - name: LFTP 설치
         run: sudo apt-get update && sudo apt-get install -y lftp
 
-      - name: 환경 변수 파일 생성
+      - name: 변경된 파일 감지 (Push 이벤트 시)
+        id: detect-changes
+        if: github.event_name == 'push'
+        uses: tj-actions/changed-files@v44 # 특정 버전 사용 권장
+        with:
+          files: |
+            public/**
+
+      - name: 변경된 스킨 확인 (Push 이벤트 시)
+        id: check-skins
+        if: github.event_name == 'push'
         run: |
-          echo "FTP_HOST=${{ secrets.FTP_HOST }}" >> .env
+          base_changed=false
+          skin1_changed=false
+          echo "Changed files: ${{ steps.detect-changes.outputs.all_changed_files }}" # 디버깅용
+          for file in ${{ steps.detect-changes.outputs.all_changed_files }}; do
+            if [[ "$file" == public/base/* ]]; then
+              base_changed=true
+            fi
+            if [[ "$file" == public/skin1/* ]]; then
+              skin1_changed=true
+            fi
+            # 다른 스킨 디렉토리가 있다면 여기에 추가 (예: mobile)
+            # if [[ "$file" == public/mobile/* ]]; then
+            #   mobile_changed=true
+            # fi
+          done
+          echo "base_changed=$base_changed" >> $GITHUB_OUTPUT
+          echo "skin1_changed=$skin1_changed" >> $GITHUB_OUTPUT
+          # echo "mobile_changed=$mobile_changed" >> $GITHUB_OUTPUT # mobile 스킨용
+          echo "Base changed: $base_changed"
+          echo "Skin1 changed: $skin1_changed"
+          # echo "Mobile changed: $mobile_changed" # mobile 스킨용
+
+      # --- 배포: base 스킨 ---
+      - name: base 스킨 배포 준비
+        id: deploy-base-prep
+        if: |
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.skin == 'base') ||
+          (github.event_name == 'push' && steps.check-skins.outputs.base_changed == 'true')
+        run: echo "Deploying base skin..."
+
+      - name: 환경 변수 파일 생성 (base)
+        if: steps.deploy-base-prep.conclusion == 'success'
+        run: |
+          echo "Creating .env for base skin"
+          echo "FTP_HOST=${{ secrets.FTP_HOST }}" > .env
           echo "FTP_PORT=${{ secrets.FTP_PORT }}" >> .env
           echo "FTP_USERNAME=${{ secrets.FTP_USERNAME }}" >> .env
           echo "FTP_PASSWORD=${{ secrets.FTP_PASSWORD }}" >> .env
           echo "FTP_BASE_DIR=${{ secrets.FTP_BASE_DIR }}" >> .env
-          echo "SKIN_DIR=${{ github.event.inputs.skin || 'base' }}" >> .env
+          echo "SKIN_DIR=base" >> .env
 
-      - name: 배포 실행
+      - name: 배포 실행 (base)
+        if: steps.deploy-base-prep.conclusion == 'success'
+        run: npm run deploy
+        env:
+          # 스크립트 자체 실행 환경 변수 (선택적이지만 권장)
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_PORT: ${{ secrets.FTP_PORT }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_BASE_DIR: ${{ secrets.FTP_BASE_DIR }}
+          SKIN_DIR: base
+
+      # --- 배포: skin1 스킨 ---
+      - name: skin1 스킨 배포 준비
+        id: deploy-skin1-prep
+        if: |
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.skin == 'skin1') ||
+          (github.event_name == 'push' && steps.check-skins.outputs.skin1_changed == 'true')
+        run: echo "Deploying skin1 skin..."
+
+      - name: 환경 변수 파일 생성 (skin1)
+        if: steps.deploy-skin1-prep.conclusion == 'success'
+        run: |
+          echo "Creating .env for skin1 skin"
+          echo "FTP_HOST=${{ secrets.FTP_HOST }}" > .env
+          echo "FTP_PORT=${{ secrets.FTP_PORT }}" >> .env
+          echo "FTP_USERNAME=${{ secrets.FTP_USERNAME }}" >> .env
+          echo "FTP_PASSWORD=${{ secrets.FTP_PASSWORD }}" >> .env
+          echo "FTP_BASE_DIR=${{ secrets.FTP_BASE_DIR }}" >> .env
+          echo "SKIN_DIR=skin1" >> .env
+
+      - name: 배포 실행 (skin1)
+        if: steps.deploy-skin1-prep.conclusion == 'success'
         run: npm run deploy
         env:
           FTP_HOST: ${{ secrets.FTP_HOST }}
@@ -62,14 +145,46 @@ jobs:
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
           FTP_BASE_DIR: ${{ secrets.FTP_BASE_DIR }}
-          SKIN_DIR: ${{ github.event.inputs.skin || 'base' }}
+          SKIN_DIR: skin1
+
+      - name: 배포된 스킨 목록 설정
+        id: set-deployed-skins
+        run: |
+          deployed=""
+          if [[ "${{ steps.deploy-base-prep.conclusion }}" == "success" ]]; then deployed="${deployed}base,"; fi
+          if [[ "${{ steps.deploy-skin1-prep.conclusion }}" == "success" ]]; then deployed="${deployed}skin1,"; fi
+          # if [[ "${{ steps.deploy-mobile-prep.conclusion }}" == "success" ]]; then deployed="${deployed}mobile,"; fi # mobile 스킨용
+
+          # 마지막 쉼표 제거
+          deployed=$(echo "$deployed" | sed 's/,$//')
+
+          if [[ -z "$deployed" && "${{ github.event_name }}" == "push" && \
+                "${{ steps.check-skins.outputs.base_changed }}" == "false" && \
+                "${{ steps.check-skins.outputs.skin1_changed }}" == "false" ]]; then
+             # 푸시 이벤트였지만 관련 변경 사항 없음
+             deployed="none"
+          elif [[ -z "$deployed" ]]; then
+             # 수동 실행에서 스킨이 선택되지 않았거나 다른 이유로 배포되지 않음
+             deployed="none"
+          fi
+
+          echo "Deployed skins: $deployed"
+          echo "skins=$deployed" >> $GITHUB_OUTPUT
 
       - name: 배포 결과 확인
-        if: always()
+        if: always() # 항상 실행하여 상태 보고
         run: |
-          if [ ${{ job.status }} == 'success' ]; then
-            echo "✅ 배포가 성공적으로 완료되었습니다."
+          deployed_skins_list="${{ steps.set-deployed-skins.outputs.skins }}"
+          echo "Final deployed skins list: $deployed_skins_list"
+
+          if [ "${{ job.status }}" == "success" ]; then
+            if [[ "$deployed_skins_list" == "none" ]]; then
+              echo "✅ 작업은 성공했지만, 변경된 스킨이 없거나 배포 대상 스킨이 없어 실제 배포는 수행되지 않았습니다."
+            else
+               echo "✅ 스킨 [${deployed_skins_list}] 배포가 성공적으로 완료되었습니다."
+            fi
           else
             echo "❌ 배포 중 오류가 발생했습니다. 로그를 확인해주세요."
+            # 실패한 스킨 식별 (더 상세한 로깅 가능)
             exit 1
           fi
