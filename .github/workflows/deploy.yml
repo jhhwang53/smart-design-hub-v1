@@ -27,6 +27,7 @@ jobs:
   deploy:
     name: Cafe24 SFTP 배포
     runs-on: ubuntu-latest
+    environment: production  # ← 이 부분 추가 (중요!)
 
     steps:
       - name: 코드 체크아웃
